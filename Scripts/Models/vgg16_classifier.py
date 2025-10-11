@@ -28,7 +28,7 @@ def collate_fn(batch):
 
 # ---------------- Improved VGG16 Model (Fixed BatchNorm Issue) ----------------
 class ImprovedVGG16Classifier(nn.Module):
-    def __init__(self, input_dim, num_classes=3, dropout_rate=0.5, hidden_dim=512):
+    def __init__(self, input_dim, num_classes=2, dropout_rate=0.5, hidden_dim=512):
         super().__init__()
         
         self.feature_processor = nn.Sequential(
@@ -156,7 +156,7 @@ def improved_grid_search(features):
 
             model = ImprovedVGG16Classifier(
                 input_dim=input_dim, 
-                num_classes=3, 
+                num_classes=2, 
                 dropout_rate=dropout_rate,
                 hidden_dim=hidden_dim
             ).to(device)
@@ -271,7 +271,7 @@ def improved_train_and_evaluate(features):
 
         model = ImprovedVGG16Classifier(
             input_dim=input_dim,
-            num_classes=3,
+            num_classes=2,
             dropout_rate=dropout_rate,
             hidden_dim=hidden_dim
         ).to(device)
