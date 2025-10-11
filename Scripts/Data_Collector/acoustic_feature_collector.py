@@ -15,6 +15,9 @@ class AcousticFeatures(Dataset):
         self.data = pd.read_csv(f"Dataset/CSV/{model_state}_split_stress.csv")
         self.feature_dir = f"Dataset/Acoustic_Features/{model_state}"
         self.feature_type = feature_type
+        
+        unique_labels = sorted(self.data["stress"].unique())       
+        self.label_map = {label: idx for idx, label in enumerate(unique_labels)}
 
     def __len__(self):
         return len(self.data)
@@ -32,7 +35,6 @@ class AcousticFeatures(Dataset):
         features = np.load(feature_path)  # shape: (time_steps, feat_dim)
 
         features = torch.tensor(features, dtype=torch.float32)
-        label_map = {"High-stress": 0, "Low-stress": 1, "Non-stress": 2}
-        label = torch.tensor(label_map[row["stress"]], dtype=torch.long)  # sesuaikan kolom label di CSV
+        label = torch.tensor(self.label_map[row["stress"]], dtype=torch.long) # sesuaikan kolom label di CSV
 
         return features, label, filename

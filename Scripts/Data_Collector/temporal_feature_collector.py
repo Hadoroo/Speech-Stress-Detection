@@ -15,6 +15,9 @@ class TemporalFeatures(Dataset):
         self.feature_dir = f"Dataset/Temporal_Features/{model_state}"
         self.acoustic_feature_type = acoustic_feature_type
         self.temporal_feature_type = temporal_feature_type
+        
+        unique_labels = sorted(self.data["stress"].unique())       
+        self.label_map = {label: idx for idx, label in enumerate(unique_labels)}
 
     def __len__(self):
         return len(self.data)
@@ -32,7 +35,6 @@ class TemporalFeatures(Dataset):
         features = np.load(feature_path)  # shape: (time_steps, feat_dim)
 
         features = torch.tensor(features, dtype=torch.float32)
-        label_map = {"High-stress": 0, "Low-stress": 1, "Non-stress": 2}
-        label = torch.tensor(label_map[row["stress"]], dtype=torch.long)  # sesuaikan kolom label di CSV
+        label = torch.tensor(self.label_map[row["stress"]], dtype=torch.long)  # sesuaikan kolom label di CSV
 
         return features, label, filename

@@ -11,14 +11,18 @@ os.makedirs("Dataset/CSV", exist_ok=True)
 # ---------------- Load all audio files ----------------
 files = [f for f in os.listdir(dataset_folder) if f.endswith(".wav")]
 
-# ---------------- Emotion → Stress mapping ----------------
+# ---------------- Emotion → Stress mapping (berdasarkan penelitian) ----------------
+# angry, sad, disgusted, fearful → stress
+# happy, pleasant, surprised, neutral → non-stress
 stress_map = {
-    "ANG": "High-stress",
-    "SAD": "High-stress",
-    "FEA": "Low-stress",   
-    "DIS": "Low-stress",   
-    "NEU": "Non-stress",
-    "HAP": "Non-stress"
+    "ANG": "Stress",
+    "SAD": "Stress",
+    "DIS": "Stress",
+    "FEA": "Stress",
+    "HAP": "Non-stress",
+    "PLE": "Non-stress",
+    "SUR": "Non-stress",
+    "NEU": "Non-stress"
 }
 
 # ---------------- Parse filename metadata ----------------
@@ -30,7 +34,7 @@ for f in files:
 
     actor = parts[0]                  # nomor aktor
     sentence = parts[1]               # kalimat
-    emotion = parts[2]                # emosi
+    emotion = parts[2]                # emosi (ANG, SAD, FEA, dll)
     pitch = parts[3].split(".")[0]    # intonasi (HI, LO, MD, XX)
     
     stress = stress_map.get(emotion, "unknown")
@@ -47,7 +51,7 @@ df = df[df["stress"] != "unknown"]
 # 2️⃣ Hapus pitch yang tidak diketahui (XX)
 df = df[df["pitch"].str.upper() != "XX"]
 
-# 3️⃣ (Opsional) reset index agar rapi
+# 3️⃣ Reset index agar rapi
 df = df.reset_index(drop=True)
 
 # ---------------- Speaker-independent split ----------------
