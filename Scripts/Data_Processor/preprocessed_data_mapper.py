@@ -1,20 +1,14 @@
-import os, sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
+import os
 import pandas as pd
 from sklearn.model_selection import GroupShuffleSplit
 
-# ---------------- Paths ----------------
-dataset_folder = "Dataset/Processed"
-os.makedirs("Dataset/CSV", exist_ok=True)
+# ---------------- Dataset list ----------------
+dataset_list = ['CREMAD', 'RAVDESS', 'TESS']
+base_folder = "Dataset"
 
-# ---------------- Load all audio files ----------------
-files = [f for f in os.listdir(dataset_folder) if f.endswith(".wav")]
-
-# ---------------- Emotion → Stress mapping (berdasarkan penelitian) ----------------
-# angry, sad, disgusted, fearful → stress
-# happy, pleasant, surprised, neutral → non-stress
-stress_map = {
+# ---------------- Mapping rules ----------------
+# CREMAD emotion → stress mapping
+stress_map_cremad = {
     "ANG": "Stress",
     "SAD": "Stress",
     "DIS": "Stress",
@@ -25,53 +19,96 @@ stress_map = {
     "NEU": "Non-stress"
 }
 
-# ---------------- Parse filename metadata ----------------
-data = []
-for f in files:
-    parts = f.split("_")
-    if len(parts) < 4:  # skip file dengan format tidak valid
+# RAVDESS mapping
+ravdess_emotions = {
+    "01": "neutral",
+    "02": "calm",
+    "03": "happy",
+    "04": "sad",
+    "05": "angry",
+    "06": "fearful",
+    "07": "disgust",
+    "08": "surprised"
+}
+ravdess_nonstress = ["neutral", "calm", "happy"]
+
+# TESS mapping
+tess_nonstress = ["neutral", "happy", "pleasant_surprise"]
+
+# ---------------- Loop per dataset ----------------
+for dataset in dataset_list:
+    print(f"\n📂 Memproses dataset: {dataset}")
+    processed_path = os.path.join(base_folder, dataset, "Processed")
+    csv_path = os.path.join(base_folder, dataset, "CSV")
+    os.makedirs(csv_path, exist_ok=True)
+
+    if not os.path.exists(processed_path):
+        print(f"⚠️  Folder tidak ditemukan: {processed_path}")
         continue
 
-    actor = parts[0]                  # nomor aktor
-    sentence = parts[1]               # kalimat
-    emotion = parts[2]                # emosi (ANG, SAD, FEA, dll)
-    pitch = parts[3].split(".")[0]    # intonasi (HI, LO, MD, XX)
-    
-    stress = stress_map.get(emotion, "unknown")
+    files = [f for f in os.listdir(processed_path) if f.lower().endswith(".wav")]
+    data = []
 
-    data.append([f, actor, sentence, emotion, pitch, stress])
+    for f in files:
+        if dataset == "CREMAD":
+            parts = f.replace(".wav", "").split("_")
+            if len(parts) != 4:
+                continue
+            actor, sentence, emotion, intensity = parts
+            stress = stress_map_cremad.get(emotion, "unknown")
+            if stress != "unknown":
+                data.append([f, actor, emotion, stress])
 
-# Buat DataFrame
-df = pd.DataFrame(data, columns=["filename", "actor", "sentence", "emotion", "pitch", "stress"])
+        elif dataset == "RAVDESS":
+            parts = f.replace(".wav", "").split("-")
+            if len(parts) < 7:
+                continue
+            emotion_code = parts[2]
+            actor = parts[-1]
+            emotion = ravdess_emotions.get(emotion_code, "unknown")
+            if emotion != "unknown":
+                stress = "Non-stress" if emotion in ravdess_nonstress else "Stress"
+                data.append([f, actor, emotion, stress])
 
-# ---------------- Data cleaning ----------------
-# 1️⃣ Hapus emosi yang tidak dipetakan
-df = df[df["stress"] != "unknown"]
+        elif dataset == "TESS":
+            # Contoh nama: OAF_back_fear.wav → actor=OAF, emotion=fear
+            name = f.replace(".wav", "")
+            parts = name.split("_")
+            if len(parts) < 3:
+                continue
+            actor = parts[0]               # OAF / YAF
+            emotion = parts[-1].lower()    # ambil bagian terakhir (emosi sebenarnya)
+            stress = "Non-stress" if emotion in tess_nonstress else "Stress"
+            data.append([f, actor, emotion, stress])
 
-# 2️⃣ Hapus pitch yang tidak diketahui (XX)
-df = df[df["pitch"].str.upper() != "XX"]
+    # Buat DataFrame
+    df = pd.DataFrame(data, columns=["filename", "actor", "emotion", "stress"])
 
-# 3️⃣ Reset index agar rapi
-df = df.reset_index(drop=True)
+    if len(df) == 0:
+        print(f"⚠️  Tidak ada file valid di {dataset}")
+        continue
 
-# ---------------- Speaker-independent split ----------------
-splitter = GroupShuffleSplit(n_splits=1, test_size=0.3, random_state=42)
-train_idx, test_idx = next(splitter.split(df, groups=df["actor"]))
+    # ---------------- Speaker-independent split ----------------
+    splitter = GroupShuffleSplit(n_splits=1, test_size=0.3, random_state=42)
+    train_idx, test_idx = next(splitter.split(df, groups=df["actor"]))
 
-df_train = df.iloc[train_idx]
-df_test  = df.iloc[test_idx]
+    df_train = df.iloc[train_idx]
+    df_test  = df.iloc[test_idx]
 
-# ---------------- Print summary ----------------
-print(f"Total data: {len(df)} (setelah filter pitch XX dan unknown stress)\n")
+    # ---------------- Print summary ----------------
+    print(f"Total data: {len(df)}")
+    print("Actor train:", df_train["actor"].nunique(), "→", sorted(df_train["actor"].unique()))
+    print("Actor test:", df_test["actor"].nunique(), "→", sorted(df_test["actor"].unique()))
+    print("Distribusi train:", df_train["stress"].value_counts().to_dict())
+    print("Distribusi test :", df_test["stress"].value_counts().to_dict())
 
-print("Actor train:", df_train["actor"].nunique(), "→", sorted(df_train["actor"].unique()))
-print("Actor test:", df_test["actor"].nunique(), "→", sorted(df_test["actor"].unique()))
+    # ---------------- Save CSV ----------------
+    train_file = os.path.join(csv_path, "train_split_stress.csv")
+    test_file  = os.path.join(csv_path, "test_split_stress.csv")
 
-print("\nTrain distribution:", df_train["stress"].value_counts().to_dict())
-print("Test distribution:", df_test["stress"].value_counts().to_dict())
+    df_train.to_csv(train_file, index=False)
+    df_test.to_csv(test_file, index=False)
 
-# ---------------- Save CSV ----------------
-df_train.to_csv("Dataset/CSV/train_split_stress.csv", index=False)
-df_test.to_csv("Dataset/CSV/test_split_stress.csv", index=False)
+    print(f"✅ Split selesai → disimpan di {csv_path}")
 
-print("\n✅ Split speaker-independent selesai dan disimpan di folder Dataset/CSV/")
+print("\n🎉 Semua dataset telah selesai diproses!")

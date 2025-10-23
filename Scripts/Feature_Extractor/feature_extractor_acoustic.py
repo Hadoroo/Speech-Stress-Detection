@@ -6,21 +6,13 @@ import librosa
 import numpy as np
 from tqdm import tqdm
 from spafe.features.gfcc import gfcc
-from sklearn.preprocessing import StandardScaler
-import joblib
 
 # ============================================================
 # ====================== CONFIGURATIONS =======================
 # ============================================================
-dataset_folder = "Dataset/Processed"
-features_dir = "Dataset/Acoustic_Features"
+datasets = ["RAVDESS", "TESS", "CREMAD"]
 splits = ["train", "test"]
 feat_types = ["MFCC", "GFCC", "LogFBank", "F0"]
-
-# Buat folder output
-for split in splits:
-    for feat_type in feat_types:
-        os.makedirs(os.path.join(features_dir, split, feat_type), exist_ok=True)
 
 # ============================================================
 # ==================== SPEC-AUGMENTATION =====================
@@ -102,63 +94,44 @@ def extract_f0(file_path, sr=16000, fmin=50, fmax=500, frame_length=2048, hop_le
     return np.array(f0_list).reshape(-1, 1)
 
 # ============================================================
-# ======================= SCALER FITTING =====================
-# ============================================================
-scalers = {}
-scaler_dir = "Results/Tuning/Acoustic_Features_Scaler"
-scaler_paths = {ftype: os.path.join(scaler_dir, f"scaler_{ftype}.pkl") for ftype in ["MFCC", "GFCC", "LogFBank"]}
-os.makedirs(scaler_dir, exist_ok=True)
-
-if all(os.path.exists(path) for path in scaler_paths.values()):
-    print("📂 Scaler ditemukan, langsung load...")
-    for ftype in ["MFCC", "GFCC", "LogFBank"]:
-        scalers[ftype] = joblib.load(scaler_paths[ftype])
-else:
-    print("🔎 Scaler belum ada, fitting dari data train...")
-    all_train_feats = {ftype: [] for ftype in ["MFCC", "GFCC", "LogFBank"]}
-    train_csv = "Dataset/CSV/train_split_stress.csv"
-    df_train = pd.read_csv(train_csv)
-
-    for _, row in tqdm(df_train.iterrows(), desc="Collecting train features"):
-        filename = row["filename"]
-        filepath = os.path.join(dataset_folder, filename)
-        mfcc_feat, gfcc_feat, logfbank_feat = extract_features(filepath)
-        all_train_feats["MFCC"].append(np.mean(mfcc_feat, axis=0))
-        all_train_feats["GFCC"].append(np.mean(gfcc_feat, axis=0))
-        all_train_feats["LogFBank"].append(np.mean(logfbank_feat, axis=0))
-
-    for ftype in ["MFCC", "GFCC", "LogFBank"]:
-        data = np.array(all_train_feats[ftype])
-        scaler = StandardScaler().fit(data)
-        scalers[ftype] = scaler
-        joblib.dump(scaler, scaler_paths[ftype])
-        print(f"✅ Scaler untuk {ftype} disimpan di {scaler_paths[ftype]}")
-
-# ============================================================
 # ======================= MAIN EXTRACTION ====================
 # ============================================================
-for split in splits:
-    csv_path = f"Dataset/CSV/{split}_split_stress.csv"
-    df = pd.read_csv(csv_path)
+for dataset_name in datasets:
+    print(f"\n📁 Memproses dataset: {dataset_name}")
 
-    for _, row in tqdm(df.iterrows(), total=len(df), desc=f"Extracting {split} features"):
-        filename = row["filename"]
-        file_id = os.path.splitext(filename)[0]
-        filepath = os.path.join(dataset_folder, filename)
+    processed_folder = f"Dataset/{dataset_name}/Processed"
+    csv_folder = f"Dataset/{dataset_name}/CSV"
+    features_dir = f"Dataset/{dataset_name}/Acoustic_Features"
 
-        # Ekstraksi MFCC, GFCC, LogFBank
-        mfcc_feat, gfcc_feat, logfbank_feat = extract_features(filepath)
-        mfcc_scaled = scalers["MFCC"].transform(mfcc_feat.reshape(-1, mfcc_feat.shape[-1]))
-        gfcc_scaled = scalers["GFCC"].transform(gfcc_feat.reshape(-1, gfcc_feat.shape[-1]))
-        logfbank_scaled = scalers["LogFBank"].transform(logfbank_feat.reshape(-1, logfbank_feat.shape[-1]))
+    # Buat struktur folder per dataset
+    for split in splits:
+        for feat_type in feat_types:
+            os.makedirs(os.path.join(features_dir, split, feat_type), exist_ok=True)
 
-        np.save(os.path.join(features_dir, split, "MFCC", f"{file_id}_mfcc.npy"), mfcc_scaled)
-        np.save(os.path.join(features_dir, split, "GFCC", f"{file_id}_gfcc.npy"), gfcc_scaled)
-        np.save(os.path.join(features_dir, split, "LogFBank", f"{file_id}_logfbank.npy"), logfbank_scaled)
+    for split in splits:
+        csv_path = os.path.join(csv_folder, f"{split}_split_stress.csv")
+        if not os.path.exists(csv_path):
+            print(f"⚠️ CSV {csv_path} tidak ditemukan, dilewati.")
+            continue
 
-        # Ekstraksi F0 (tanpa normalisasi)
-        f0_feat = extract_f0(filepath)
-        np.save(os.path.join(features_dir, split, "F0", f"{file_id}_f0.npy"), f0_feat)
+        df = pd.read_csv(csv_path)
+        for _, row in tqdm(df.iterrows(), total=len(df), desc=f"{dataset_name} - {split}"):
+            filename = row["filename"]
+            file_id = os.path.splitext(filename)[0]
+            filepath = os.path.join(processed_folder, filename)
 
-print("🎉 Semua fitur (MFCC, GFCC, LogFBank, F0) berhasil diekstraksi dan disimpan!")
-print("📁 Output disimpan di:", features_dir)
+            if not os.path.exists(filepath):
+                continue
+
+            # Ekstraksi MFCC, GFCC, LogFBank
+            mfcc_feat, gfcc_feat, logfbank_feat = extract_features(filepath)
+            np.save(os.path.join(features_dir, split, "MFCC", f"{file_id}_mfcc.npy"), mfcc_feat)
+            np.save(os.path.join(features_dir, split, "GFCC", f"{file_id}_gfcc.npy"), gfcc_feat)
+            np.save(os.path.join(features_dir, split, "LogFBank", f"{file_id}_logfbank.npy"), logfbank_feat)
+
+            # Ekstraksi F0 (tanpa normalisasi)
+            f0_feat = extract_f0(filepath)
+            np.save(os.path.join(features_dir, split, "F0", f"{file_id}_f0.npy"), f0_feat)
+
+print("🎉 Semua fitur (MFCC, GFCC, LogFBank, F0) berhasil diekstraksi tanpa standarisasi!")
+print("📁 Output disimpan di masing-masing folder Dataset/<dataset_name>/Acoustic_Features/")

@@ -5,14 +5,15 @@ import torch
 from torch.utils.data import Dataset
 
 class TemporalFeatures(Dataset):
-    def __init__(self, model_state, acoustic_feature_type="MFCC", temporal_feature_type="temporal"):
+    def __init__(self, dataset_name, model_state, acoustic_feature_type="MFCC", temporal_feature_type="temporal"):
         """
-        csv_file: path ke CSV (train/test/eval)
-        feature_dir: folder hasil ekstraksi fitur
-        feature_type: "MFCC", "GFCC", atau "LogFBank"
+        dataset_name: nama dataset (misalnya 'RAVDESS' atau 'TESS')
+        model_state: 'train' atau 'test'
+        acoustic_feature_type: 'MFCC', 'GFCC', atau 'LogFBank'
+        temporal_feature_type: nama fitur temporal (misalnya 'temporal', 'delta', dst)
         """
-        self.data = pd.read_csv(f"Dataset/CSV/{model_state}_split_stress.csv")
-        self.feature_dir = f"Dataset/Temporal_Features/{model_state}"
+        self.data = pd.read_csv(f"Dataset/{dataset_name}/CSV/{model_state}_split_stress.csv")
+        self.feature_dir = f"Dataset/{dataset_name}/Temporal_Features/{model_state}/{acoustic_feature_type}"
         self.acoustic_feature_type = acoustic_feature_type
         self.temporal_feature_type = temporal_feature_type
         
@@ -26,15 +27,18 @@ class TemporalFeatures(Dataset):
         row = self.data.iloc[idx]
         filename = os.path.splitext(row["filename"])[0]  # tanpa .wav
 
-        # load fitur npy sesuai jenis
+        # Path file fitur
         feature_path = os.path.join(
             self.feature_dir,
-            self.acoustic_feature_type,
             f"{filename}_{self.temporal_feature_type}.npy"
         )
+
+        if not os.path.exists(feature_path):
+            raise FileNotFoundError(f"Feature file not found: {feature_path}")
+
         features = np.load(feature_path)  # shape: (time_steps, feat_dim)
 
         features = torch.tensor(features, dtype=torch.float32)
-        label = torch.tensor(self.label_map[row["stress"]], dtype=torch.long)  # sesuaikan kolom label di CSV
+        label = torch.tensor(self.label_map[row["stress"]], dtype=torch.long)
 
         return features, label, filename
