@@ -1,33 +1,43 @@
 import os
 import librosa
 import soundfile as sf
-from tqdm import tqdm
 import numpy as np
+from tqdm import tqdm
 
-Dataset = ['RAVDESS', 'CREMAD', 'TESS']
+Dataset = ['CREMAD']
+
+TARGET_SR = 16000
+TARGET_PEAK = 10 ** (-1 / 20)   # -1 dBFS ≈ 0.891
+
+def peak_normalize(y, peak_target=TARGET_PEAK):
+    peak = np.max(np.abs(y))
+    if peak == 0:
+        return y
+    return y * (peak_target / peak)
 
 for dataset in Dataset:
     input_folder = f"Dataset/{dataset}/Raw"
     output_folder = f"Dataset/{dataset}/Processed"
     os.makedirs(output_folder, exist_ok=True)
 
-    def process_audio(file_path, out_path):
-        y, sr = librosa.load(file_path, sr=16000, mono=True)
-
-        # Optional: trim silence jika perlu
-        # y, _ = librosa.effects.trim(y, top_db=20)
-
-        # Normalisasi RMS ke target dBFS
-        y = librosa.util.normalize(y)
-
-        # Simpan versi asli saja (tanpa augmentasi)
-        sf.write(out_path, y, sr, subtype="PCM_16")
-
-    files = [f for f in os.listdir(input_folder) if f.lower().endswith((".wav", ".mp3", ".flac", ".ogg"))]
+    files = [
+        f for f in os.listdir(input_folder)
+        if f.lower().endswith((".wav", ".mp3", ".flac", ".ogg"))
+    ]
 
     for file in tqdm(files, desc=f"Processing {dataset}", unit="file"):
         in_path = os.path.join(input_folder, file)
-        out_path = os.path.join(output_folder, os.path.splitext(file)[0] + ".wav")
-        process_audio(in_path, out_path)
+        out_path = os.path.join(
+            output_folder, os.path.splitext(file)[0] + ".wav"
+        )
 
-print("✅ Selesai! Semua file asli telah diproses dan disimpan di folder Processed.")
+        # Load audio → 16 kHz → mono
+        y, sr = librosa.load(in_path, sr=TARGET_SR, mono=True)
+
+        # Peak normalize to -1 dBFS
+        y = peak_normalize(y, TARGET_PEAK)
+
+        # Save as 16-bit PCM WAV
+        sf.write(out_path, y, TARGET_SR, subtype="PCM_16")
+
+print("✅ Selesai! Semua audio sudah di-convert ke 16kHz, mono, 16-bit PCM, dan peak-normalized -1 dBFS.")

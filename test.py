@@ -1,5 +1,8 @@
-import os
+import soundfile as sf
+import sounddevice as sd
 
-folder_path = "Dataset/TESS/Processed"
-file_count = sum(len(files) for _, _, files in os.walk(folder_path))
-print(f"Total file di {folder_path}: {file_count}")
+file = "LDC99S78.1 (1).sph"
+
+data, samplerate = sf.read(file)
+sd.play(data, samplerate)
+sd.wait()

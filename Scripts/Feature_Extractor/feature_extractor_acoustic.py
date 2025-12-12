@@ -1,137 +1,221 @@
-import os, sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-import pandas as pd
-import librosa
+import os
+import sys
 import numpy as np
+import librosa
+from scipy.fft import dct
 from tqdm import tqdm
-from spafe.features.gfcc import gfcc
+import pandas as pd
+import warnings
 
-# ============================================================
-# ====================== CONFIGURATIONS =======================
-# ============================================================
-datasets = ["RAVDESS", "TESS", "CREMAD"]
+# Optional spafe (for gammatone filters)
+try:
+    from spafe.utils.filters import gammatone_filter_banks as spafe_gammatone_fb
+    _HAS_SPAFE = True
+except Exception:
+    _HAS_SPAFE = False
+
+# ==========================
+# CONFIGURATIONS
+# ==========================
+SR = 16000
+N_FFT = 2048
+HOP = 512
+
+# Baseline Kumar
+MEL_N_MELS = 128
+
+# Novelty features
+MFCC_N_MELS = 64
+LOGF_N_MELS = 80
+GFCC_NFILTS = 48
+NUM_CEPS = 13
+
+USE_CMVN = True
+
+datasets = ["CREMAD"]
 splits = ["train", "test"]
-feat_types = ["MFCC", "GFCC", "LogFBank", "F0"]
+feat_types = ["MEL", "MFCC", "GFCC", "LogFBank"]
 
-# ============================================================
-# ==================== SPEC-AUGMENTATION =====================
-# ============================================================
-def spec_augment(mel_spectrogram, time_mask=20, freq_mask=8):
-    mel = mel_spectrogram.copy()
-    num_frames, num_mels = mel.shape
+# ==========================
+# UTILITIES
+# ==========================
+def preemphasis(x, c=0.97):
+    x = x.astype(np.float32)
+    return np.append(x[0], x[1:] - c * x[:-1]).astype(np.float32)
 
-    # Time mask
-    if num_frames > time_mask:
-        t = np.random.randint(0, time_mask)
-        t0 = np.random.randint(0, num_frames - t)
-        mel[t0:t0+t, :] = 0
+def pad_if_short(y, target_len=N_FFT):
+    """Pad audio jika lebih pendek dari frame_length (N_FFT)."""
+    if len(y) < target_len:
+        pad = target_len - len(y)
+        y = np.concatenate([y, np.zeros(pad, dtype=np.float32)])
+    return y
 
-    # Frequency mask
-    if num_mels > freq_mask:
-        f = np.random.randint(0, freq_mask)
-        f0 = np.random.randint(0, num_mels - f)
-        mel[:, f0:f0+f] = 0
+def framing(y, n_fft=N_FFT, hop=HOP):
+    """Return (T, n_fft) minimal 1 frame (di-pad jika perlu)."""
+    y = pad_if_short(y, n_fft)
+    frames = librosa.util.frame(y, frame_length=n_fft, hop_length=hop).T
 
-    return mel
+    if frames.shape[0] == 0:
+        # Force 1 frame padded with zeros
+        frames = np.zeros((1, n_fft), dtype=np.float32)
 
-# ============================================================
-# ==================== FEATURE EXTRACTORS ====================
-# ============================================================
-def extract_features(file_path, sr=16000):
-    """Ekstraksi MFCC, GFCC, LogFBank."""
-    y, sr = librosa.load(file_path, sr=sr, mono=True)
-    y = librosa.effects.preemphasis(y)
-    
-    # --- MFCC ---
-    mfcc_feat = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, n_fft=2048, hop_length=512)
-    mfcc_delta = librosa.feature.delta(mfcc_feat)
-    mfcc_delta2 = librosa.feature.delta(mfcc_feat, order=2)
-    mfcc_feat = np.vstack([mfcc_feat, mfcc_delta, mfcc_delta2])  # 39 dim
+    win = np.hamming(n_fft).astype(np.float32)
+    return frames * win
 
-    # --- GFCC ---
-    gfcc_feat = gfcc(
-        sig=y,
-        fs=sr,
-        num_ceps=13,
-        nfilts=40,
-        nfft=2048,
-        low_freq=0,
-        high_freq=sr / 2
-    )
+def power_spectrum(frames):
+    spec = np.fft.rfft(frames, n=N_FFT, axis=1)
+    return (1.0 / N_FFT) * (np.abs(spec) ** 2 + 1e-12)
 
-    # --- LogFBank ---
-    mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=64, n_fft=2048, hop_length=512)
-    logfbank_feat = librosa.power_to_db(mel_spec, ref=np.max)
-    logfbank_scaled = (logfbank_feat - np.min(logfbank_feat)) / (np.max(logfbank_feat) - np.min(logfbank_feat) + 1e-8)
-    logfbank_scaled = spec_augment(logfbank_scaled)
+def cmvn(feat):
+    mean = np.mean(feat, axis=0, keepdims=True)
+    std = np.std(feat, axis=0, keepdims=True)
+    std = np.where(std < 1e-9, 1.0, std)
+    return ((feat - mean) / std).astype(np.float32)
 
-    return mfcc_feat.T, gfcc_feat, logfbank_scaled.T
+_CACHE = {}
+
+def mel_fbanks(sr, n_fft, n_mels):
+    key = ("mel", sr, n_fft, n_mels)
+    if key not in _CACHE:
+        _CACHE[key] = librosa.filters.mel(sr=sr, n_fft=n_fft, n_mels=n_mels).astype(np.float32)
+    return _CACHE[key]
+
+def gammatone_fbanks(sr, n_fft, nfilts):
+    key = ("gt", sr, n_fft, nfilts)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    n_bins = n_fft // 2 + 1
+
+    if _HAS_SPAFE:
+        gt = spafe_gammatone_fb(nfilts=nfilts, nfft=n_fft, fs=sr)
+        gt = np.asarray(gt, dtype=np.float32)
+    else:
+        # Deterministic fallback
+        mel = librosa.core.mel_frequencies(n_mels=nfilts, fmin=0.0, fmax=sr/2.0)
+        freqs = np.linspace(0, sr/2.0, n_bins)
+        gt = np.zeros((nfilts, n_bins), dtype=np.float32)
+        for i, c in enumerate(mel):
+            width = max(50.0, c * 0.25 + 50.0)
+            left, right = c - width, c + width
+            left_mask = (freqs >= left) & (freqs <= c)
+            right_mask = (freqs > c) & (freqs <= right)
+            if left_mask.any():
+                gt[i, left_mask] = (freqs[left_mask] - left) / (c - left + 1e-12)
+            if right_mask.any():
+                gt[i, right_mask] = (right - freqs[right_mask]) / (right - c + 1e-12)
+            gt[i] /= (gt[i].sum() + 1e-12)
+
+    _CACHE[key] = gt.astype(np.float32)
+    return _CACHE[key]
+
+def sanitize_feat(x):
+    x = np.asarray(x, dtype=np.float32)
+    if not np.isfinite(x).all():
+        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+    return x
+
+# ==========================
+# FEATURE EXTRACTION
+# ==========================
+def extract_features(filepath):
+    try:
+        y, _ = librosa.load(filepath, sr=SR, mono=True)
+    except Exception:
+        return None
+
+    # Always pad if needed → no skipping
+    y = pad_if_short(y, N_FFT)
+    y = preemphasis(y)
+    frames = framing(y)
+    power = power_spectrum(frames)
+
+    # ===== MEL =====
+    mel_fb = mel_fbanks(SR, N_FFT, MEL_N_MELS)
+    mel = np.dot(power, mel_fb.T)
+    mel = np.log(np.maximum(mel, 1e-12))
+    if USE_CMVN:
+        mel = cmvn(mel)
+    mel = sanitize_feat(mel)
+
+    # ===== MFCC =====
+    mel_fb_mfcc = mel_fbanks(SR, N_FFT, MFCC_N_MELS)
+    mel_energy = np.dot(power, mel_fb_mfcc.T)
+    mel_energy = np.log(np.maximum(mel_energy, 1e-12))
+    mfcc = dct(mel_energy, type=2, axis=1, norm="ortho")[:, :NUM_CEPS]
+    mfcc_T = mfcc.T
+    mfcc_d1 = librosa.feature.delta(mfcc_T, order=1).T
+    mfcc_d2 = librosa.feature.delta(mfcc_T, order=2).T
+    mfcc_full = np.concatenate([mfcc, mfcc_d1, mfcc_d2], axis=1)
+    if USE_CMVN:
+        mfcc_full = cmvn(mfcc_full)
+    mfcc_full = sanitize_feat(mfcc_full)
+
+    # ===== GFCC =====
+    gt_fb = gammatone_fbanks(SR, N_FFT, GFCC_NFILTS)
+    gt_energy = np.dot(power, gt_fb.T)
+    gt_energy = np.maximum(gt_energy, 1e-12)
+    gfcc = dct(np.log(gt_energy), type=2, axis=1, norm="ortho")[:, :NUM_CEPS]
+    gfcc_T = gfcc.T
+    gfcc_d1 = librosa.feature.delta(gfcc_T, order=1).T
+    gfcc_d2 = librosa.feature.delta(gfcc_T, order=2).T
+    gfcc_full = np.concatenate([gfcc, gfcc_d1, gfcc_d2], axis=1)
+    if USE_CMVN:
+        gfcc_full = cmvn(gfcc_full)
+    gfcc_full = sanitize_feat(gfcc_full)
+
+    # ===== LogFBank =====
+    mel_fb_log = mel_fbanks(SR, N_FFT, LOGF_N_MELS)
+    logf = np.dot(power, mel_fb_log.T)
+    logf = np.log(np.maximum(logf, 1e-12))
+    if USE_CMVN:
+        logf = cmvn(logf)
+    logf = sanitize_feat(logf)
+
+    return mel.astype(np.float32), mfcc_full.astype(np.float32), gfcc_full.astype(np.float32), logf.astype(np.float32)
 
 
-def extract_f0(file_path, sr=16000, fmin=50, fmax=500, frame_length=2048, hop_length=512):
-    """Ekstraksi fundamental frequency (F0) berbasis FFT."""
-    y, sr = librosa.load(file_path, sr=sr, mono=True)
-    f0_list = []
+# ==========================
+# MAIN PIPELINE
+# ==========================
+def main():
+    for dataset in datasets:
+        print(f"\nExtracting features for dataset: {dataset}")
 
-    for i in range(0, len(y) - frame_length, hop_length):
-        frame = y[i:i + frame_length] * np.hamming(frame_length)
+        processed = f"Dataset/{dataset}/Processed"
+        csv_dir = f"Dataset/{dataset}/CSV"
+        out_dir = f"Dataset/{dataset}/Acoustic_Features"
 
-        # FFT
-        spectrum = np.fft.rfft(frame)
-        freqs = np.fft.rfftfreq(len(frame), 1 / sr)
-        magnitude = np.abs(spectrum)
+        for split in splits:
+            for ft in feat_types:
+                os.makedirs(os.path.join(out_dir, split, ft), exist_ok=True)
 
-        valid_idx = np.where((freqs >= fmin) & (freqs <= fmax))[0]
-        if len(valid_idx) == 0:
-            f0_list.append(0.0)
-            continue
-
-        peak_idx = valid_idx[np.argmax(magnitude[valid_idx])]
-        f0 = freqs[peak_idx]
-        f0_list.append(f0)
-
-    return np.array(f0_list).reshape(-1, 1)
-
-# ============================================================
-# ======================= MAIN EXTRACTION ====================
-# ============================================================
-for dataset_name in datasets:
-    print(f"\n📁 Memproses dataset: {dataset_name}")
-
-    processed_folder = f"Dataset/{dataset_name}/Processed"
-    csv_folder = f"Dataset/{dataset_name}/CSV"
-    features_dir = f"Dataset/{dataset_name}/Acoustic_Features"
-
-    # Buat struktur folder per dataset
-    for split in splits:
-        for feat_type in feat_types:
-            os.makedirs(os.path.join(features_dir, split, feat_type), exist_ok=True)
-
-    for split in splits:
-        csv_path = os.path.join(csv_folder, f"{split}_split_stress.csv")
-        if not os.path.exists(csv_path):
-            print(f"⚠️ CSV {csv_path} tidak ditemukan, dilewati.")
-            continue
-
-        df = pd.read_csv(csv_path)
-        for _, row in tqdm(df.iterrows(), total=len(df), desc=f"{dataset_name} - {split}"):
-            filename = row["filename"]
-            file_id = os.path.splitext(filename)[0]
-            filepath = os.path.join(processed_folder, filename)
-
-            if not os.path.exists(filepath):
+        for split in splits:
+            csv_path = os.path.join(csv_dir, f"{split}_split_stress.csv")
+            if not os.path.exists(csv_path):
+                print("CSV missing:", csv_path)
                 continue
 
-            # Ekstraksi MFCC, GFCC, LogFBank
-            mfcc_feat, gfcc_feat, logfbank_feat = extract_features(filepath)
-            np.save(os.path.join(features_dir, split, "MFCC", f"{file_id}_mfcc.npy"), mfcc_feat)
-            np.save(os.path.join(features_dir, split, "GFCC", f"{file_id}_gfcc.npy"), gfcc_feat)
-            np.save(os.path.join(features_dir, split, "LogFBank", f"{file_id}_logfbank.npy"), logfbank_feat)
+            df = pd.read_csv(csv_path)
 
-            # Ekstraksi F0 (tanpa normalisasi)
-            f0_feat = extract_f0(filepath)
-            np.save(os.path.join(features_dir, split, "F0", f"{file_id}_f0.npy"), f0_feat)
+            for _, row in tqdm(df.iterrows(), total=len(df), desc=f"{dataset}-{split}"):
+                fname = row["filename"]
+                id_ = os.path.splitext(fname)[0]
+                path = os.path.join(processed, fname)
 
-print("🎉 Semua fitur (MFCC, GFCC, LogFBank, F0) berhasil diekstraksi tanpa standarisasi!")
-print("📁 Output disimpan di masing-masing folder Dataset/<dataset_name>/Acoustic_Features/")
+                res = extract_features(path)
+                if res is None:
+                    continue
+
+                mel, mfcc_feat, gfcc_feat, logf_feat = res
+
+                np.save(os.path.join(out_dir, split, "MEL", f"{id_}_mel.npy"), mel)
+                np.save(os.path.join(out_dir, split, "MFCC", f"{id_}_mfcc.npy"), mfcc_feat)
+                np.save(os.path.join(out_dir, split, "GFCC", f"{id_}_gfcc.npy"), gfcc_feat)
+                np.save(os.path.join(out_dir, split, "LogFBank", f"{id_}_logfbank.npy"), logf_feat)
+
+    print("\n🎉 Feature extraction completed.")
+
+
+if __name__ == "__main__":
+    main()
