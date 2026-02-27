@@ -40,4 +40,4 @@ for dataset in Dataset:
         # Save as 16-bit PCM WAV
         sf.write(out_path, y, TARGET_SR, subtype="PCM_16")
 
-print("✅ Selesai! Semua audio sudah di-convert ke 16kHz, mono, 16-bit PCM, dan peak-normalized -1 dBFS.")
+print("Selesai")
