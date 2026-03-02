@@ -16,7 +16,7 @@ N_FFT = 2048
 HOP = 512
 MAX_LEN = 128
 
-INPUT_DIR = "Dataset/CREMAD/Raw"
+INPUT_DIR = "Dataset/CREMAD/Processed"
 OUTPUT_DIR = "Dataset/CREMAD/Acoustic_Features"
 
 # =====================
@@ -29,10 +29,9 @@ def pad_or_truncate(feat, max_len):
     return feat[:, :max_len]
 
 def normalize(feat, eps=1e-8):
-    mean = np.mean(feat)
-    std = np.std(feat)
+    mean = np.mean(feat, axis=1, keepdims=True)
+    std = np.std(feat, axis=1, keepdims=True)
     return (feat - mean) / (std + eps)
-
 
 # =====================
 # FEATURE EXTRACTION
