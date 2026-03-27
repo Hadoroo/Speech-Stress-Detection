@@ -35,12 +35,12 @@ FEATURES = [
 ]
 
 param_grid = {
-    "k1": [32, 64],
-    "k2": [64, 128],
+    "k1": [32, 64, 128],
+    "k2": [64, 128, 256],
     "dropout1": [0.2, 0.3],
     "dropout2": [0.3, 0.4],
-    "batch_size": [16, 32],
-    "lr": [1e-3, 1e-4],
+    "batch_size": [16, 32, 64],
+    "lr": [1e-2, 1e-3, 1e-4],
 }
 
 metadata = pd.read_csv(os.path.join(SPLIT_PATH, "metadata.csv"))
