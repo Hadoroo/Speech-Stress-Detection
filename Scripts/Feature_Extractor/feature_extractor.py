@@ -1,7 +1,6 @@
 import os
 import numpy as np
 import librosa
-from scipy.signal import lfilter
 from spafe.features.gfcc import gfcc
 from tqdm import tqdm
 
@@ -9,14 +8,11 @@ from tqdm import tqdm
 # CONFIG
 # =====================
 SR = 16000
-N_MFCC = 40
-N_GFCC = 40
-N_LPC = 16
 N_FFT = 2048
 HOP = 512
-MAX_LEN = 128
+MAX_LEN = 75
 
-INPUT_DIR = "Dataset/CREMAD/Processed"
+INPUT_DIR = "Dataset/CREMAD/Raw"
 OUTPUT_DIR = "Dataset/CREMAD/Acoustic_Features"
 
 # =====================
@@ -25,7 +21,7 @@ OUTPUT_DIR = "Dataset/CREMAD/Acoustic_Features"
 def pad_or_truncate(feat, max_len):
     if feat.shape[1] < max_len:
         pad = max_len - feat.shape[1]
-        return np.pad(feat, ((0,0),(0,pad)))
+        return np.pad(feat, ((0, 0), (0, pad)))
     return feat[:, :max_len]
 
 def normalize(feat, eps=1e-8):
@@ -36,32 +32,26 @@ def normalize(feat, eps=1e-8):
 # =====================
 # FEATURE EXTRACTION
 # =====================
+
+# MFCC
 def extract_mfcc(y):
-    mfcc = librosa.feature.mfcc(
-        y=y, sr=SR, n_mfcc=N_MFCC,
-        n_fft=N_FFT, hop_length=HOP
-    )
-
+    mfcc = librosa.feature.mfcc(y=y, sr=SR)  
     mfcc = normalize(mfcc)
-
     return pad_or_truncate(mfcc, MAX_LEN)
 
+
+# GFCC
 def extract_gfcc(y):
-    g = gfcc(
-        sig=y,
-        fs=SR,
-        num_ceps=N_GFCC,
-        nfilts=64,
-        nfft=N_FFT
-    ).T
-
+    g = gfcc(sig=y, fs=SR).T  
     g = normalize(g)
-
     return pad_or_truncate(g, MAX_LEN)
 
 
+# LPC
 def extract_lpc(y):
     lpc_feat = []
+
+    order = int(2 + SR / 1000)
 
     frames = librosa.util.frame(
         y,
@@ -70,7 +60,7 @@ def extract_lpc(y):
     )
 
     for frame in frames.T:
-        coeff = librosa.lpc(frame, order=N_LPC)
+        coeff = librosa.lpc(frame, order=order)
         lpc_feat.append(coeff[1:])
 
     lpc_feat = np.array(lpc_feat).T
@@ -110,5 +100,4 @@ for root, _, files in os.walk(INPUT_DIR):
                 feat
             )
 
-print("✅ Semua fitur berhasil diekstrak.")
-
+print("Semua fitur berhasil diekstrak")
