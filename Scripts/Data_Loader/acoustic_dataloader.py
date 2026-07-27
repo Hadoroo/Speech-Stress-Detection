@@ -1,55 +1,151 @@
-import torch
-from torch.utils.data import Dataset
 import os
 import numpy as np
+import torch
+
+from torch.utils.data import Dataset
 
 class AcousticDataset(Dataset):
-    def __init__(self, feature_root, metadata_df, feature_type):
-        """
-        feature_type:
-            - "MFCC"
-            - ["MFCC", "GFCC"]
-            - ["MFCC","GFCC","LPC"]
-        """
-        self.feature_root = feature_root
-        self.metadata = metadata_df.reset_index(drop=True)
 
-        # pastikan selalu list untuk fleksibilitas
+    def __init__(
+        self,
+        feature_root,
+        metadata_df,
+        feature_type,
+        preload=True
+    ):
+
+        self.feature_root = feature_root
+
+        self.filenames = (
+            metadata_df["filename"]
+            .tolist()
+        )
+
+        self.labels = (
+            metadata_df["label"]
+            .tolist()
+        )
+
+        # =====================================
+        # Feature type
+        # =====================================
+
         if isinstance(feature_type, str):
             self.feature_type = [feature_type]
         else:
             self.feature_type = feature_type
 
+        # =====================================
+        # Build paths
+        # =====================================
+
+        self.feature_paths = []
+
+        for filename in self.filenames:
+
+            paths = []
+
+            for feat in self.feature_type:
+
+                path = os.path.join(
+                    self.feature_root,
+                    feat,
+                    filename
+                )
+
+                paths.append(path)
+
+            self.feature_paths.append(paths)
+
+        # =====================================
+        # PRELOAD TO RAM
+        # =====================================
+
+        self.preload = preload
+
+        if self.preload:
+
+            print("Preloading features into RAM...")
+
+            self.cache = []
+
+            for paths in self.feature_paths:
+
+                feature_list = []
+
+                for path in paths:
+
+                    x = np.load(path)
+
+                    if x.ndim == 1:
+                        x = x[:, np.newaxis]
+
+                    feature_list.append(x)
+
+                # early fusion
+                x = np.concatenate(
+                    feature_list,
+                    axis=0
+                )
+
+                # add channel dimension
+                x = np.expand_dims(
+                    x,
+                    axis=0
+                )
+
+                # numpy -> tensor
+                x = torch.from_numpy(x).float()
+
+                self.cache.append(x)
+
+            print("Preload finished.")
+
     def __len__(self):
-        return len(self.metadata)
+        return len(self.filenames)
 
     def __getitem__(self, idx):
-        row = self.metadata.iloc[idx]
-        filename = row["filename"]
-        label = row["label"]
 
-        feature_list = []
+        # =====================================
+        # LOAD FROM RAM CACHE
+        # =====================================
 
-        for feat in self.feature_type:
-            path = os.path.join(self.feature_root, feat, filename)
-            x = np.load(path)
+        if self.preload:
 
-            # pastikan 2D → (F, T)
-            if x.ndim == 1:
-                x = x[:, np.newaxis]
+            x = self.cache[idx]
 
-            feature_list.append(x)
+        # =====================================
+        # LOAD FROM DISK
+        # =====================================
 
-        # =========================
-        # EARLY FUSION
-        # =========================
-        # gabung di axis frequency
-        x = np.concatenate(feature_list, axis=0)
+        else:
 
-        # pastikan format CNN (C, F, T)
-        x = x[np.newaxis, :, :]
+            feature_list = []
 
-        return (
-            torch.tensor(x, dtype=torch.float32),
-            torch.tensor(label, dtype=torch.long)
+            for path in self.feature_paths[idx]:
+
+                x = np.load(path)
+
+                if x.ndim == 1:
+                    x = x[:, np.newaxis]
+
+                feature_list.append(x)
+
+            x = np.concatenate(
+                feature_list,
+                axis=0
+            )
+
+            x = np.expand_dims(
+                x,
+                axis=0
+            )
+
+            x = torch.from_numpy(x).float()
+
+        y = torch.tensor(
+            self.labels[idx],
+            dtype=torch.long
         )
+
+        return x, y

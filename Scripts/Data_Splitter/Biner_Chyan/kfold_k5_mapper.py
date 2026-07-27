@@ -25,7 +25,7 @@ for file in sorted(os.listdir(FEATURE_ROOT)):
     if not file.endswith(".wav"):
         continue
 
-    # contoh: 1001_DFA_ANG_XX.npy
+    # 1001_DFA_ANG_XX.npy
     parts = file.replace(".wav", "").split("_")
     if len(parts) < 4:
         continue
